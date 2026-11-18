@@ -8,7 +8,7 @@ In Colab, choose **File → Save a copy in Drive** so you keep your own working 
 
 ## 2. Select free cloud hardware
 
-In Colab choose **Runtime → Change runtime type → T4 GPU** when it is available. Free GPU access is not guaranteed. The notebook can fall back to smaller CPU models, but that will be much slower.
+In Colab choose **Runtime → Change runtime type → T4 GPU** when it is available. Free GPU access is not guaranteed. The full-bank workflow stops if no T4-class GPU is attached rather than silently using weak/slow CPU models. Retry when a free GPU becomes available.
 
 ## 3. Run the notebook cells
 
@@ -28,7 +28,7 @@ The persistent folder is `Google Drive/MyDrive/NEET-Mock-Intelligence/`. It hold
 
 ## 5. Resume after a runtime reset
 
-Colab's free runtime is temporary and its GPU quota/availability changes. The notebook backs up its database to Drive after each paper, analysis batch and NEET match. Reopen your saved notebook, run the setup/model cell, then rerun the analysis cell. Completed work is skipped and the remaining work resumes. The model weights may need to download again in a new runtime.
+Colab's free runtime is temporary and its GPU quota/availability changes. The notebook uses Qwen3.5 9B as the multimodal primary analyst and DeepSeek-R1 8B as the independent verifier on a T4-class GPU. The notebook backs up its database to Drive after each paper, analysis batch and NEET match. Reopen your saved notebook, run the setup/model cell, then rerun the analysis cell. Completed work is skipped and the remaining work resumes. The model weights may need to download again in a new runtime.
 
 ## Accuracy and limitations
 

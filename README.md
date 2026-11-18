@@ -34,7 +34,7 @@ The notebook uses Google Colab's free hosted CPU/GPU resources and runs open-wei
 
 A continuous, always-on upload website with guaranteed GPU compute and permanent storage cannot be promised at $0. The Colab notebook is the free option: it runs online, but you must open the notebook and start/resume the job yourself. Do not use a Colab notebook as a hidden web server; this project uses the normal notebook interface and upload controls.
 
-A Google account and enough Google Drive storage are required. For best performance, select **Runtime → Change runtime type → T4 GPU** when available. If no GPU is available, the notebook falls back to smaller CPU models, which will be substantially slower and may take multiple sessions.
+A Google account and enough Google Drive storage are required. For best performance, select **Runtime → Change runtime type → T4 GPU** when available. The full-bank workflow requires a T4-class GPU (about 14 GB VRAM or more) and stops with instructions if no suitable GPU is attached; it does not silently downgrade the 5,400-question analysis to weak CPU models. Retry when free GPU access becomes available.
 
 ## Privacy
 
