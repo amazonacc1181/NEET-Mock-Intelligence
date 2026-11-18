@@ -1,55 +1,52 @@
 # Start here — NEET Mock Intelligence
 
-## 1. Put your PDFs in the folder
+You do **not** need to buy an API, create a model-provider account, paste an API key or manually choose an AI model.
 
-Copy the 30 mock question PDFs into:
+## One-time setup
 
-`input/mock_papers/`
+1. Install Python 3.11 or newer.
+2. On Windows, double-click `run_windows.bat`. On macOS/Linux, run `./run_mac_linux.sh` from a terminal.
+3. The launcher installs the Python requirements, installs Ollama where supported, detects available RAM/disk/GPU, downloads the best local model tier that fits, configures the local endpoint and opens the app at `http://localhost:8501`.
+4. The first run needs an internet connection and several GB to tens of GB of free disk space because model weights are downloaded once. They are not hosted in this GitHub repository.
 
-Use names that include each test number, for example:
+If automatic Ollama installation fails, install it from https://ollama.com/download and run the launcher again. The app's **ONE-CLICK** page also has a local AI repair/setup control.
 
-- `Allen_Test_01.pdf`
-- `Allen_Test_02.pdf`
-- …
-- `Allen_Test_30.pdf`
+## Your only analysis workflow
 
-If you have separate answer/solution PDFs, place them in `input/mock_solutions/` and keep the same test numbers in their filenames. The real NEET 2026 PDF is uploaded later inside the app.
+Open the **ONE-CLICK: Full analysis** page:
 
-## 2. Start the app on Windows
+1. Upload the 30 mock question-paper PDFs together.
+2. Optionally upload answer keys / detailed mock solutions.
+3. Upload the actual NEET 2026 question-paper PDF.
+4. Click **START COMPLETE ANALYSIS — generate final PDF**.
 
-1. Install Python 3.11 (tick **Add Python to PATH** during installation).
-2. Double-click `run_windows.bat`.
-3. On first launch, Notepad opens `.env`. Add your model provider's API key and exact model ID, then save and close Notepad.
-4. The app opens in your browser at `http://localhost:8501`.
+The local AI team then imports the papers, analyses the extracted mock questions, analyses the NEET paper, retrieves candidate matches, classifies and independently verifies matches where a second model is available, and creates the reports. Completed analyses are checkpointed, so you can resume after an interruption by pressing the same button again.
 
-For macOS/Linux, run `chmod +x run_mac_linux.sh` and then `./run_mac_linux.sh`. Edit `.env` before analysing questions.
+## Files you receive
 
-## 3. Connect an AI model
+- `NEET_2026_Mock_Comparison_Detailed_Report.pdf` — the detailed report for every NEET question, with matched mock test/question numbers, relationship category, concepts, differences, solution comparison, evidence, confidence and unmatched/unprocessed status.
+- `All_Mock_Questions_Analysis_Catalogue.pdf` — a question-by-question analysis catalogue for the entire mock bank.
+- `NEET_2026_Mock_Comparison_Audit_Workbook.xlsx` — searchable tables containing the full mock analysis, NEET summary, every accepted match and extraction QA.
 
-The app does not contain an API key. In `.env`, configure:
+The files are downloadable from the app when the run finishes and are also saved locally under `data/`.
 
-- `LLM_BASE_URL` — your provider's OpenAI-compatible API base URL
-- `LLM_API_KEY` — your own API key (or the local-server placeholder shown in `.env.example`)
-- `LLM_MODEL` — exact model identifier from that provider
+## What the local model setup chooses
 
-You can use a hosted API or a local OpenAI-compatible server such as Ollama/LM Studio. Free API plans have usage limits; the full 5,400-question analysis may need to be resumed over multiple quota windows. See `README.md` for verifier, vision model and provider examples.
+The setup script checks available system RAM, NVIDIA VRAM when detectable, and free disk space. It selects one of these tiers:
 
-For stronger local semantic question retrieval, install the optional BGE embedding model after the app's first launch. On Windows, in a new terminal from this project folder, run `.venv\Scripts\python -m pip install -r requirements-ai.txt`. The first embedding-model run downloads the model; lexical search remains available without it.
+- **High accuracy:** Qwen3.8 27B multimodal primary model + DeepSeek-R1 14B independent verifier + BGE-M3 embedding model + BGE reranker (requires a powerful computer and substantial storage).
+- **Balanced:** Qwen3.5 9B multimodal primary model + DeepSeek-R1 8B verifier + BGE-M3 semantic retrieval.
+- **Lightweight:** Qwen3.5 4B or 2B multimodal model and a smaller embedding model; no separate verifier. Analysis quality will be lower on this tier.
 
-## 4. Run the four workflow steps
+Model weights are downloaded locally from the public Ollama registry and Hugging Face model registry. No per-token API payment is used. Model licensing is governed by the model authors' licences; review those before commercial reuse.
 
-1. **Mock PDFs:** open the tab and click **Read / import mock PDFs from folder**.
-2. **Analyse mock bank:** click **Analyse / resume all unanalysed mock questions**. It checkpoints completed questions.
-3. **NEET 2026 paper:** upload the actual NEET PDF, parse it, then analyse it.
-4. **Match & report:** run matching and download the Excel report.
+## Important quality notes
 
-## 5. Review extraction before trusting results
+- This is a local research assistant, not an official NEET answer key. AI-generated solutions are labelled and should be checked against trusted solutions.
+- PDF extraction QA is essential. Review warnings for scanned pages, two-column layouts, formulae, chemical structures, diagrams and missing question numbers.
+- The retriever ranks a candidate shortlist from the full bank, then the language model compares those candidates. A retrieval miss can still hide a true relationship.
+- “No meaningful match” means no qualifying match was accepted from the candidates retrieved; it is not proof that no similar mock question exists.
+- Model confidence is not a calibrated probability. Review low-confidence results and any result used for official teaching or assessment.
+- The app does not upload your files to GitHub. PDFs, model caches, local database and reports stay on your computer. The local Ollama service receives prompts only from your own computer.
 
-Open **Question review** and inspect the PDF extraction QA. Correct any merged/missing symbols, options or diagrams before running the analysis/matching stages. Scanned PDFs may need Tesseract OCR installed. For best visual matching of diagrams/graphs, configure a vision-capable model in `.env`.
-
-## Important
-
-- Do not put your question PDFs, `.env`, API keys or `data/` files in a public GitHub repository. They are excluded by `.gitignore`.
-- The seven relationship categories are described in `README.md`.
-- A no-match result means no qualifying match was found in the retrieved candidate shortlist; it is not proof that no related mock question exists.
-- AI answers and confidence scores are not official or guaranteed. Verify low-confidence matches and solutions against trusted sources.
+See `README.md` for technical details, limitations and troubleshooting.

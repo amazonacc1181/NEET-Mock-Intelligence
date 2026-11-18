@@ -16,8 +16,10 @@ from core import config
 from core.database import init_db, get_papers, get_questions, get_match_rows, get_match_run_map, delete_papers_by_kind, update_question_content
 from core.llm import RELATIONSHIP_LABELS, get_primary_client, get_verifier_client, get_vision_client, LLMError
 from core.pdf_pipeline import save_uploaded_file, folder_pdfs
-from core.reporting import export_workbook
-from core.workflow import ingest_folder, ingest_one_file, analyze_bank, run_matching
+from core.reporting import export_workbook, export_pdf_report
+from core.workflow import ingest_folder, ingest_one_file, analyze_bank, run_matching, run_full_analysis
+from core.local_ai import connection_status, configure_local_ai, hardware_profile, model_plan
+from core.agent_team import team_status
 
 st.set_page_config(page_title="NEET Mock Intelligence", page_icon="🧠", layout="wide")
 init_db()
@@ -66,17 +68,99 @@ papers, mocks, neet, analyzed_mock, analyzed_neet = paper_metrics()
 # Sidebar: provider setup and workflow navigation.
 with st.sidebar:
     st.header("Workflow")
-    page = st.radio("Go to", ["Overview", "1 · Mock PDFs", "2 · Analyse mock bank", "3 · NEET 2026 paper", "4 · Match & report", "Question review"], label_visibility="collapsed")
+    page = st.radio("Go to", ["ONE-CLICK: Full analysis", "Overview", "1 · Mock PDFs", "2 · Analyse mock bank", "3 · NEET 2026 paper", "4 · Match & report", "Question review"], label_visibility="collapsed")
     st.divider()
-    st.subheader("AI connection")
-    primary_ready = bool(config.LLM_BASE_URL and config.LLM_MODEL and (config.LLM_API_KEY or "localhost" in config.LLM_BASE_URL or "127.0.0.1" in config.LLM_BASE_URL))
-    st.write("Primary model:", "🟢 configured" if primary_ready else "🔴 not configured")
-    st.caption(f"Model: {config.LLM_MODEL or 'not set'}")
-    st.write("Independent verifier:", "🟢 configured" if (config.VERIFY_BASE_URL and config.VERIFY_MODEL) else "⚪ optional")
-    st.write("Vision model:", "🟢 configured" if (config.VISION_BASE_URL and config.VISION_MODEL) else "⚪ optional")
-    st.caption("Edit .env and restart the app to change models. Do not paste API keys in this screen.")
+    st.subheader("Local AI team")
+    local_status = connection_status()
+    primary_ready = bool(local_status["running"] and config.LLM_MODEL and config.LLM_MODEL in local_status["models"])
+    st.write("Ollama local engine:", "🟢 running" if local_status["running"] else "🔴 not running")
+    st.caption(f"Main model: {config.LLM_MODEL or 'not configured'}")
+    st.write("Independent verifier:", "🟢 configured" if config.VERIFY_MODEL else "⚪ same-model review")
+    st.write("Vision model:", "🟢 configured" if config.VISION_MODEL else "⚪ not configured")
+    st.caption("No cloud API key is required. Models run on this computer after their one-time download.")
 
-if page == "Overview":
+if page == "ONE-CLICK: Full analysis":
+    st.header("Run the complete NEET mock comparison")
+    st.write("Upload your mock question papers and the actual NEET 2026 paper here. The local AI team will extract, analyse, compare, verify and prepare the final detailed PDF and audit workbook.")
+    profile = hardware_profile()
+    plan = model_plan(profile)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("System RAM", f"{profile['ram_gb']} GB")
+    c2.metric("GPU VRAM", f"{profile['vram_gb']} GB")
+    c3.metric("Free disk", f"{profile['free_disk_gb']} GB")
+    st.info(f"Recommended local setup: **{plan['tier']}** · Main model: `{plan['primary_model'] or 'not supported'}` · Independent verifier: `{plan['verifier_model'] or 'not available on this hardware'}`. {plan['note']}")
+    if not local_status["running"] or not primary_ready:
+        st.warning("The local AI engine/model is not ready yet. On first use, the launcher installs Ollama (where supported) and downloads the selected open-weight model. You can also repair the setup below.")
+        if st.button("Set up / repair local AI models", type="primary"):
+            with st.status("Preparing local AI models…", expanded=True) as status_box:
+                try:
+                    def model_progress(message):
+                        status_box.write(message)
+                    setup_result = configure_local_ai(model_progress)
+                    status_box.update(label="Local AI is ready", state="complete")
+                    st.success(f"Main model: {setup_result['plan']['primary_model']}. No API key used.")
+                    st.rerun()
+                except Exception as exc:
+                    status_box.update(label="Local AI setup needs attention", state="error")
+                    st.error(str(exc))
+        st.markdown("Install Ollama manually if needed: [ollama.com/download](https://ollama.com/download). Then restart this app.")
+
+    st.divider()
+    mock_uploads = st.file_uploader("1. Upload all 30 mock question-paper PDFs", type=["pdf"], accept_multiple_files=True, key="full_mock_uploads")
+    solution_uploads = st.file_uploader("2. Optional: upload mock answer keys / detailed solutions", type=["pdf"], accept_multiple_files=True, key="full_solution_uploads")
+    neet_upload = st.file_uploader("3. Upload the actual NEET 2026 question-paper PDF", type=["pdf"], accept_multiple_files=False, key="full_neet_upload")
+    mock_existing = folder_pdfs(config.MOCK_DIR)
+    neet_existing = folder_pdfs(config.NEET_DIR)
+    st.caption(f"Already in local folders: {len(mock_existing)} mock PDFs · {len(folder_pdfs(config.SOLUTION_DIR))} solution PDFs · {len(neet_existing)} NEET PDF(s). Uploads are stored locally; nothing is pushed back to GitHub.")
+    ready_to_run = bool((mock_uploads or mock_existing) and (neet_upload or neet_existing) and primary_ready)
+    if st.button("START COMPLETE ANALYSIS — generate final PDF", type="primary", use_container_width=True, disabled=not ready_to_run):
+        with st.status("The AI team is working through your papers…", expanded=True) as work_status:
+            bar = st.progress(0.0)
+            message = st.empty()
+            try:
+                for f in mock_uploads or []:
+                    save_uploaded_file(f, config.MOCK_DIR)
+                for f in solution_uploads or []:
+                    save_uploaded_file(f, config.SOLUTION_DIR)
+                if neet_upload is not None:
+                    target = config.NEET_DIR / "NEET_2026.pdf"
+                    target.write_bytes(neet_upload.getbuffer())
+                    neet_path = target
+                else:
+                    neet_path = neet_existing[0]
+                result = run_full_analysis(config.MOCK_DIR, config.SOLUTION_DIR, neet_path, progress_callback(bar, message))
+                st.session_state["full_analysis_result"] = result
+                work_status.update(label="Analysis and report generation finished", state="complete")
+            except Exception as exc:
+                work_status.update(label="Analysis stopped — resume after fixing the issue", state="error")
+                st.error(f"{type(exc).__name__}: {exc}")
+                st.info("Completed question analyses and matching results are checkpointed in the local database. Fix the issue and press the button again to resume.")
+
+    result = st.session_state.get("full_analysis_result")
+    if result:
+        st.success("The report files have been generated locally.")
+        col1, col2 = st.columns(2)
+        pdf_file = Path(result["pdf_path"])
+        catalogue_file = Path(result["catalogue_path"])
+        workbook_file = Path(result["workbook_path"])
+        if pdf_file.exists():
+            col1.download_button("Download detailed NEET comparison PDF", data=pdf_file.read_bytes(), file_name=pdf_file.name, mime="application/pdf", type="primary", use_container_width=True)
+        if workbook_file.exists():
+            col2.download_button("Download complete audit workbook", data=workbook_file.read_bytes(), file_name=workbook_file.name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        if catalogue_file.exists():
+            st.download_button("Download all-mock-question analysis catalogue PDF", data=catalogue_file.read_bytes(), file_name=catalogue_file.name, mime="application/pdf", use_container_width=True)
+        st.subheader("Manager's final quality review")
+        st.json(result.get("final_review", {}))
+        st.subheader("Run summary")
+        st.write({"Mock questions analysed": result["mock_analysis"]["analyzed"], "NEET questions analysed": result["neet_analysis"]["analyzed"], "Accepted mock matches": result["matching"]["matches_created"], "Verifier enabled": result["matching"]["verifier_enabled"], "Vision model enabled": result["matching"]["vision_enabled"]})
+        show_warnings(result.get("warnings", []))
+
+    st.divider()
+    st.subheader("AI company-style division of labour")
+    for agent in team_status(config.LLM_MODEL, config.VERIFY_MODEL, config.VISION_MODEL, config.EMBEDDING_MODEL):
+        st.markdown(f"**{agent['name']}** · `{agent['model']}`  " + "\n" + agent["mode"])
+
+elif page == "Overview":
     a, b, c, d = st.columns(4)
     a.metric("Mock PDFs", sum(p["kind"] == "mock" for p in papers))
     b.metric("Mock questions", f"{len(mocks):,}")
@@ -95,7 +179,7 @@ if page == "Overview":
     st.info("Your PDF files and question database stay on this computer by default. Do not commit PDFs, API keys or the data folder to a public GitHub repository.")
 
     if not primary_ready:
-        st.warning("Connect a model first: copy `.env.example` to `.env`, then set LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. A local Ollama server can also be used. See README.md.")
+        st.warning("Run the one-time local AI setup from the ONE-CLICK page or launch script. No cloud API key is required.")
 
     if papers:
         st.subheader("Imported PDFs")

@@ -10,6 +10,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+from core import config
 from core.config import CACHE_DIR
 
 
@@ -41,7 +42,7 @@ def question_search_text(q: dict[str, Any]) -> str:
 class HybridRetriever:
     """Hybrid semantic + lexical retrieval. LLM comparison is the final adjudicator."""
 
-    def __init__(self, documents: list[dict[str, Any]], embedding_model_name: str = "BAAI/bge-small-en-v1.5", enable_embeddings: bool = True):
+    def __init__(self, documents: list[dict[str, Any]], embedding_model_name: str = "BAAI/bge-m3", enable_embeddings: bool = True, enable_reranker: bool | None = None, reranker_model_name: str | None = None):
         if not documents:
             raise ValueError("Question bank is empty; ingest mock papers first.")
         self.documents = documents
@@ -54,6 +55,8 @@ class HybridRetriever:
         self.embedding_model = None
         self.document_embeddings = None
         self.embedding_status = "Disabled"
+        self.reranker = None
+        self.reranker_status = "Disabled"
         if enable_embeddings:
             try:
                 from sentence_transformers import SentenceTransformer
@@ -75,6 +78,15 @@ class HybridRetriever:
                     self.embedding_model = SentenceTransformer(embedding_model_name, device="cpu")
             except Exception as exc:
                 self.embedding_status = f"Local embedding model unavailable; lexical retrieval active ({type(exc).__name__})."
+        use_reranker = enable_reranker if enable_reranker is not None else config.ENABLE_RERANKER
+        if use_reranker:
+            try:
+                from sentence_transformers import CrossEncoder
+                name = reranker_model_name or config.RERANKER_MODEL
+                self.reranker = CrossEncoder(name, max_length=1024, device="cpu")
+                self.reranker_status = f"Local cross-encoder reranker ready: {name}"
+            except Exception as exc:
+                self.reranker_status = f"Reranker unavailable; hybrid retrieval remains active ({type(exc).__name__})."
 
     def rank(self, query_question: dict[str, Any], top_k: int = 30, subject_filter: str | None = None) -> list[tuple[dict[str, Any], float]]:
         query = question_search_text(query_question)
@@ -96,13 +108,25 @@ class HybridRetriever:
                 rough_scores[~mask] = -1.0
         # Fuzzy string comparison is expensive across every pair. Run it only on the
         # leading lexical/semantic shortlist; the BGE + word/character scores rank the full bank.
-        rough_count = min(200, len(self.documents))
+        rough_count = min(max(200, config.RERANK_CANDIDATES), len(self.documents))
         rough_indices = np.argpartition(rough_scores, -rough_count)[-rough_count:]
         exact_scores = np.zeros(len(self.documents), dtype=np.float32)
         norm_q = _plain(query)
         for i in rough_indices:
             exact_scores[int(i)] = SequenceMatcher(None, norm_q, _plain(self.texts[int(i)])).ratio()
         combined = 0.95 * rough_scores + 0.05 * exact_scores
+        if self.reranker is not None:
+            selected = [int(i) for i in rough_indices]
+            pairs = [(query, self.texts[i][:6000]) for i in selected]
+            try:
+                raw_scores = np.asarray(self.reranker.predict(pairs, batch_size=16, show_progress_bar=False), dtype=np.float32).reshape(-1)
+                # Cross-encoder logits are compressed to a stable 0..1 scale before fusion.
+                scaled = 1.0 / (1.0 + np.exp(-np.clip(raw_scores, -20, 20)))
+                fused = 0.78 * scaled + 0.17 * rough_scores[selected] + 0.05 * exact_scores[selected]
+                combined = np.full(len(self.documents), -1.0, dtype=np.float32)
+                combined[selected] = fused
+            except Exception as exc:
+                self.reranker_status = f"Reranker failed for this query; hybrid scores used ({type(exc).__name__})."
         count = min(top_k, len(self.documents))
         indices = np.argpartition(combined, -count)[-count:]
         indices = indices[np.argsort(combined[indices])[::-1]]

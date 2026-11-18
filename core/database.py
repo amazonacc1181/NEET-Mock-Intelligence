@@ -217,7 +217,7 @@ def save_matches(neet_id: str, matches: list[dict[str, Any]]) -> None:
 def get_match_rows() -> list[dict[str, Any]]:
     query = """SELECT m.*, nq.question_number AS neet_qno, np.label AS neet_label,
                      nq.question_text AS neet_text, nq.question_ordinal AS neet_ordinal, nq.subject AS subject, nq.analysis_json AS neet_analysis,
-                     mq.question_number AS mock_qno, mq.question_ordinal AS mock_ordinal, mp.label AS mock_label, mp.test_number AS test_number,
+                     mq.question_number AS mock_qno, mq.question_ordinal AS mock_ordinal, mq.page_number AS mock_page_number, mp.label AS mock_label, mp.test_number AS test_number,
                      mp.filename AS mock_filename, mq.question_text AS mock_text, mq.analysis_json AS mock_analysis
               FROM matches m
               JOIN questions nq ON nq.id=m.neet_question_id JOIN papers np ON np.id=nq.paper_id

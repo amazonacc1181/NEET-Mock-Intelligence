@@ -13,7 +13,7 @@ from core.database import (
 )
 from core.llm import (
     LLMError, analyze_question_batch, analyze_single_question, classify_matches,
-    get_primary_client, get_verifier_client, get_vision_client, verify_match_batch,
+    get_primary_client, get_verifier_client, get_vision_client, verify_match_batch, audit_question_analyses, manager_review,
 )
 from core.pdf_pipeline import folder_pdfs, infer_doc_kind, ingest_pdf
 from core.retrieval import HybridRetriever
@@ -84,56 +84,74 @@ def _solution_lookup() -> dict[tuple[int | None, int], str]:
 def analyze_bank(kind: str = "mock", progress: Progress | None = None, batch_size: int | None = None) -> dict[str, Any]:
     progress = progress or _noop_progress
     client = get_primary_client()
+    verifier = get_verifier_client()
     vision_client = get_vision_client()
     questions = get_questions(kind, unanalysed_only=True)
     if not questions:
-        return {"analyzed": 0, "remaining": 0, "errors": []}
+        return {"analyzed": 0, "remaining": 0, "errors": [], "verified": 0}
     sol_index = {(q.get("test_number"), int(q.get("question_ordinal", q["question_number"]))): q.get("question_text", "") for q in get_questions("solution")}
     for q in questions:
         q["source_solution"] = sol_index.get((q.get("test_number"), int(q.get("question_ordinal", q["question_number"]))), "")
-    batch_size = max(1, min(12, batch_size or config.LLM_BATCH_SIZE))
+    batch_size = max(1, min(8, batch_size or config.LLM_BATCH_SIZE))
     errors: list[str] = []
     analyzed = 0
+    verified = 0
+
+    def save_results(batch: list[dict[str, Any]], results: dict[str, dict[str, Any]]) -> None:
+        nonlocal analyzed, verified
+        qa_reviews: dict[str, dict[str, Any]] = {}
+        if verifier and results:
+            try:
+                qa_reviews = audit_question_analyses(verifier, batch, results)
+                verified += len(qa_reviews)
+            except Exception as exc:
+                errors.append(f"Independent subject/solution audit unavailable for batch: {type(exc).__name__}: {exc}")
+        from core.database import update_analysis
+        for question in batch:
+            data = results.get(question["id"])
+            if not data:
+                continue
+            data["solution_origin"] = "Provided in separate mock solution PDF (AI interpreted)" if question.get("source_solution") else ("AI-derived, unverified" if data.get("answer") not in (None, "", "Uncertain") else "Not solved")
+            data["_analysis_version"] = 2
+            if question["id"] in qa_reviews:
+                review = qa_reviews[question["id"]]
+                data["_independent_review"] = review
+                corrections = review.get("corrected_fields") or {}
+                if review.get("status") == "CORRECTED" and isinstance(corrections, dict):
+                    # Keep an audit trail before applying a verifier correction.
+                    data["_pre_audit_values"] = {key: data.get(key) for key in corrections}
+                    for key, value in corrections.items():
+                        if key in {"subject", "chapter", "topic", "subtopic", "core_concept", "concept_tags", "question_type", "difficulty", "formulae_or_laws", "reactions_or_mechanisms", "ncert_anchor", "answer", "solution_steps", "common_traps"}:
+                            data[key] = value
+            else:
+                data["_independent_review"] = {"status": "NOT_RUN", "issues": ["No independent verifier model was available for this run."], "answer_check": "UNCERTAIN", "concept_check": "UNCERTAIN"}
+            update_analysis(question["id"], data)
+            analyzed += 1
+
     for start in range(0, len(questions), batch_size):
         batch = questions[start:start + batch_size]
-        progress(min(start + len(batch), len(questions)), len(questions), f"Analysing {kind} questions {start + 1}–{start + len(batch)}")
+        progress(min(start + len(batch), len(questions)), len(questions), f"Subject Analyst: analysing {kind} questions {start + 1}–{start + len(batch)}")
         try:
             results = analyze_question_batch(client, batch, vision_client)
             missing = [q for q in batch if q["id"] not in results]
-            for q in batch:
-                if q["id"] in results:
-                    data = results[q["id"]]
-                    data["solution_origin"] = "Provided in separate mock solution PDF (AI interpreted)" if q.get("source_solution") else ("AI-derived, unverified" if data.get("answer") not in (None, "", "Uncertain") else "Not solved")
-                    data["_analysis_version"] = 1
-                    from core.database import update_analysis
-                    update_analysis(q["id"], data)
-                    analyzed += 1
-            # Retry omissions one by one; a batch response should not silently lose questions.
+            save_results(batch, results)
+            # Retry omissions individually; do not silently drop any question.
             for q in missing:
                 try:
-                    data = analyze_single_question(client, q, vision_client)
-                    data["solution_origin"] = "Provided in separate mock solution PDF (AI interpreted)" if q.get("source_solution") else ("AI-derived, unverified" if data.get("answer") not in (None, "", "Uncertain") else "Not solved")
-                    data["_analysis_version"] = 1
-                    from core.database import update_analysis
-                    update_analysis(q["id"], data)
-                    analyzed += 1
+                    one = analyze_single_question(client, q, vision_client)
+                    save_results([q], {q["id"]: one})
                 except Exception as exc:
                     errors.append(f"{q.get('label')} Q{q['question_number']}: {exc}")
         except Exception as batch_exc:
-            # Fail safely and retry individually. Checkpoint each successful result.
             errors.append(f"Batch starting at {start + 1}: {type(batch_exc).__name__}: {batch_exc}")
             for q in batch:
                 try:
                     data = analyze_single_question(client, q, vision_client)
-                    data["solution_origin"] = "Provided in separate mock solution PDF (AI interpreted)" if q.get("source_solution") else ("AI-derived, unverified" if data.get("answer") not in (None, "", "Uncertain") else "Not solved")
-                    data["_analysis_version"] = 1
-                    from core.database import update_analysis
-                    update_analysis(q["id"], data)
-                    analyzed += 1
+                    save_results([q], {q["id"]: data})
                 except Exception as exc:
                     errors.append(f"{q.get('label')} Q{q['question_number']}: {exc}")
     remaining = len(get_questions(kind, unanalysed_only=True))
-    return {"analyzed": analyzed, "remaining": remaining, "errors": errors}
+    return {"analyzed": analyzed, "remaining": remaining, "errors": errors, "verified": verified}
 
 
 def analyze_neet_paper(progress: Progress | None = None) -> dict[str, Any]:
@@ -153,7 +171,7 @@ def run_matching(progress: Progress | None = None, top_candidates: int | None = 
     if unanalysed_mock or unanalysed_neet:
         raise ValueError(f"Analysis is incomplete: {len(unanalysed_mock)} mock and {len(unanalysed_neet)} NEET questions still need AI analysis.")
 
-    retriever = HybridRetriever(mock_questions, config.EMBEDDING_MODEL, config.ENABLE_EMBEDDINGS)
+    retriever = HybridRetriever(mock_questions, config.EMBEDDING_MODEL, config.ENABLE_EMBEDDINGS, config.ENABLE_RERANKER, config.RERANKER_MODEL)
     primary = get_primary_client()
     verifier = get_verifier_client() if use_verifier else None
     vision = get_vision_client()
@@ -209,7 +227,106 @@ def run_matching(progress: Progress | None = None, top_candidates: int | None = 
         "questions_processed": len(processed),
         "matches_created": newly_matched,
         "embedding_status": retriever.embedding_status,
+        "reranker_status": retriever.reranker_status,
         "verifier_enabled": bool(verifier),
         "vision_enabled": bool(vision),
         "errors": errors,
+    }
+
+
+
+def run_full_analysis(mock_dir: Path, solution_dir: Path, neet_pdf: Path, progress: Progress | None = None) -> dict[str, Any]:
+    """Manager-controlled, resumable, end-to-end local analysis and report generation."""
+    progress = progress or _noop_progress
+    from core.reporting import export_pdf_report, export_workbook, export_mock_catalogue_pdf
+    manager = get_primary_client()
+    warnings: list[str] = []
+    progress(1, 100, "Manager: checking the local AI team and source folders…")
+    mock_ingest = ingest_folder(mock_dir, "mock", lambda i, n, m: progress(2 + int(8 * i / max(n, 1)), 100, "PDF Specialist: " + m))
+    solution_ingest = ingest_folder(solution_dir, "solution", lambda i, n, m: progress(11 + int(3 * i / max(n, 1)), 100, "Solution PDF Specialist: " + m)) if folder_pdfs(solution_dir) else {"imported": [], "skipped": [], "warnings": []}
+    neet_result = ingest_one_file(neet_pdf, "neet", 1)
+    warnings.extend(mock_ingest["warnings"])
+    warnings.extend(solution_ingest["warnings"])
+    warnings.extend(neet_result.get("warnings", []))
+    mock_questions = get_questions("mock")
+    neet_questions = get_questions("neet")
+    papers = get_papers()
+    mock_papers = [p for p in papers if p["kind"] == "mock"]
+    odd_papers = [p for p in mock_papers if p["question_count"] != config.EXPECTED_MOCK_QUESTIONS]
+    if len(mock_papers) != 30:
+        warnings.append(f"Expected 30 mock test PDFs; found {len(mock_papers)}. Check that every intended paper was uploaded.")
+    if len(mock_questions) != config.EXPECTED_MOCK_QUESTIONS * 30:
+        warnings.append(f"Expected about {config.EXPECTED_MOCK_QUESTIONS * 30} mock questions across 30 papers; extracted {len(mock_questions)}. Inspect PDF extraction QA.")
+    if len(neet_questions) != config.EXPECTED_NEET_QUESTIONS:
+        warnings.append(f"Expected {config.EXPECTED_NEET_QUESTIONS} NEET questions; extracted {len(neet_questions)}. Inspect the source PDF and extraction QA.")
+    preflight = {
+        "mock_papers": len(mock_papers),
+        "mock_questions_extracted": len(mock_questions),
+        "expected_mock_questions": config.EXPECTED_MOCK_QUESTIONS * 30,
+        "papers_with_nonstandard_question_count": [{"file": p["filename"], "questions": p["question_count"]} for p in odd_papers],
+        "neet_questions_extracted": len(neet_questions),
+        "expected_neet_questions": config.EXPECTED_NEET_QUESTIONS,
+        "source_warnings": warnings[:80],
+    }
+    try:
+        preflight_review = manager_review(manager, "PAPER INGESTION QUALITY GATE", preflight, warnings)
+    except Exception as exc:
+        preflight_review = {"phase": "PAPER INGESTION QUALITY GATE", "status": "WARNING", "key_findings": [f"Manager review unavailable: {exc}"], "next_actions": []}
+    set_state("manager_preflight_review", preflight_review)
+
+    progress(15, 100, f"Manager: {len(mock_questions):,} mock questions and {len(neet_questions)} NEET questions indexed. Starting specialist analysis…")
+    mock_analysis = analyze_bank("mock", lambda i, n, m: progress(15 + int(46 * i / max(n, 1)), 100, m))
+    neet_analysis = analyze_bank("neet", lambda i, n, m: progress(62 + int(8 * i / max(n, 1)), 100, m))
+    warnings.extend(mock_analysis["errors"][:80])
+    warnings.extend(neet_analysis["errors"][:40])
+    remaining_mock = len(get_questions("mock", unanalysed_only=True))
+    remaining_neet = len(get_questions("neet", unanalysed_only=True))
+    if remaining_mock or remaining_neet:
+        raise RuntimeError(f"Analysis is not complete: {remaining_mock} mock and {remaining_neet} NEET questions are pending. Fix model errors and resume; no final report was marked complete.")
+
+    progress(71, 100, "Relationship Examiner: retrieving and comparing mock candidates for each NEET question…")
+    match_result = run_matching(lambda i, n, m: progress(71 + int(21 * i / max(n, 1)), 100, "Relationship Examiner / Independent Verifier: " + m), top_candidates=config.TOP_CANDIDATES, use_verifier=True)
+    warnings.extend(match_result["errors"][:40])
+
+    final_metrics = {
+        "mock_papers": len(mock_papers),
+        "mock_questions": len(mock_questions),
+        "mock_analysis_remaining": remaining_mock,
+        "neet_questions": len(neet_questions),
+        "neet_analysis_remaining": remaining_neet,
+        "neet_questions_processed_for_matching": match_result["questions_processed"],
+        "accepted_matches": match_result["matches_created"],
+        "candidate_retrieval": match_result["embedding_status"],
+        "cross_encoder_reranker": match_result.get("reranker_status", "Not run"),
+        "independent_match_verifier_enabled": match_result["verifier_enabled"],
+        "vision_model_enabled": match_result["vision_enabled"],
+        "warnings": warnings[:80],
+    }
+    try:
+        final_review = manager_review(manager, "FINAL REPORT RELEASE GATE", final_metrics, warnings)
+    except Exception as exc:
+        final_review = {"phase": "FINAL REPORT RELEASE GATE", "status": "WARNING", "key_findings": [f"Manager review unavailable: {exc}"], "next_actions": []}
+    set_state("manager_final_review", final_review)
+
+    progress(94, 100, "Report QA Editor: generating the detailed NEET relationship PDF and audit workbook…")
+    pdf_path = config.DATA_DIR / "NEET_2026_Mock_Comparison_Detailed_Report.pdf"
+    workbook_path = config.DATA_DIR / "NEET_2026_Mock_Comparison_Audit_Workbook.xlsx"
+    catalogue_path = config.DATA_DIR / "All_Mock_Questions_Analysis_Catalogue.pdf"
+    export_pdf_report(pdf_path)
+    export_mock_catalogue_pdf(catalogue_path)
+    export_workbook(workbook_path)
+    progress(100, 100, "Complete. Report files generated locally.")
+    return {
+        "mock_ingest": mock_ingest,
+        "solution_ingest": solution_ingest,
+        "neet_ingest": neet_result,
+        "mock_analysis": mock_analysis,
+        "neet_analysis": neet_analysis,
+        "matching": match_result,
+        "preflight_review": preflight_review,
+        "final_review": final_review,
+        "warnings": warnings,
+        "pdf_path": str(pdf_path),
+        "catalogue_path": str(catalogue_path),
+        "workbook_path": str(workbook_path),
     }

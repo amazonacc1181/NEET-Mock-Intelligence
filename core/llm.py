@@ -189,9 +189,9 @@ def get_primary_client() -> OpenAICompatibleClient:
 
 
 def get_verifier_client() -> OpenAICompatibleClient | None:
-    if not config.VERIFY_BASE_URL or not config.VERIFY_MODEL:
+    if not config.VERIFY_MODEL:
         return None
-    return OpenAICompatibleClient(config.VERIFY_BASE_URL, config.VERIFY_API_KEY, config.VERIFY_MODEL)
+    return OpenAICompatibleClient(config.VERIFY_BASE_URL or config.LLM_BASE_URL, config.VERIFY_API_KEY or config.LLM_API_KEY, config.VERIFY_MODEL)
 
 
 def get_vision_client() -> OpenAICompatibleClient | None:
@@ -386,3 +386,42 @@ def image_as_data_url(path: str | Path) -> str | None:
     mime = mimetypes.guess_type(p.name)[0] or "image/jpeg"
     encoded = base64.b64encode(p.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{encoded}"
+
+
+ANALYSIS_AUDIT_SYSTEM = """You are an independent NEET subject-matter quality auditor. You did not create the supplied analysis. Check the original question against the proposed concept, formulas/reactions, answer and solution. Do not agree by default. Do not use outside guesses to fill missing source details. If the question is ambiguous or a diagram is missing, flag it. Only propose corrections when the original question itself clearly supports them. Return valid JSON only."""
+
+
+def audit_question_analyses(verifier: OpenAICompatibleClient, questions: list[dict[str, Any]], analyses: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    payload = []
+    for q in questions:
+        analysis = analyses.get(q["id"])
+        if not analysis:
+            continue
+        payload.append({
+            "id": q["id"],
+            "question_number": q.get("question_number"),
+            "subject_hint": q.get("subject"),
+            "original_question": q.get("question_text", "")[:4500],
+            "options": q.get("options", {}),
+            "proposed_analysis": analysis,
+        })
+    if not payload:
+        return {}
+    prompt = "Audit these question analyses independently. For each id, return: id, status (PASS|CORRECTED|UNCERTAIN), issues (array), corrected_fields (object containing only fields that clearly need correction; otherwise empty), answer_check (PASS|WRONG|UNCERTAIN), concept_check (PASS|WRONG|UNCERTAIN). Do not invent a correct option if the stem or image is incomplete. Preserve exact IDs. Output {\"reviews\":[...]}.\n\n" + json.dumps({"questions": payload}, ensure_ascii=False)
+    result = verifier.json(ANALYSIS_AUDIT_SYSTEM, prompt, max_tokens=max(2400, len(payload) * 850))
+    reviews = result.get("reviews", []) if isinstance(result, dict) else []
+    requested = {q["id"] for q in questions}
+    out: dict[str, dict[str, Any]] = {}
+    for item in reviews:
+        if isinstance(item, dict) and item.get("id") in requested:
+            out[item["id"]] = item
+    return out
+
+
+MANAGER_SYSTEM = """You are the manager of a specialist AI team analysing NEET question papers. You coordinate a document extraction specialist, subject/concept analyst, solution auditor, retrieval specialist, relationship examiner and report QA editor. Evaluate only the provided pipeline metrics and warnings. Never claim a stage succeeded unless metrics show it. Identify missing papers/questions, extraction risks, unanalysed items, matching gaps and the safest next action. Return valid JSON only."""
+
+
+def manager_review(client: OpenAICompatibleClient, phase: str, metrics: dict[str, Any], warnings: list[str] | None = None) -> dict[str, Any]:
+    prompt = "Review this pipeline phase as the team manager. Return {\"phase\":..., \"status\":\"READY|WARNING|BLOCKED\", \"key_findings\":[], \"quality_gates\":[], \"next_actions\":[]}. Keep actions concrete and do not hide incomplete counts.\n\n" + json.dumps({"phase": phase, "metrics": metrics, "warnings": (warnings or [])[:100]}, ensure_ascii=False)
+    result = client.json(MANAGER_SYSTEM, prompt, max_tokens=2500)
+    return result if isinstance(result, dict) else {"phase": phase, "status": "WARNING", "key_findings": ["Manager did not return a structured review."], "quality_gates": [], "next_actions": []}

@@ -1,3 +1,2 @@
-# Optional but strongly recommended for better semantic retrieval.
-# Downloads BAAI/bge-small-en-v1.5 on first run (~small model, local CPU inference).
+# Local retrieval models. These download open model weights into the local cache.
 sentence-transformers>=3.0
