@@ -1,0 +1,16 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.streamlit/
+.DS_Store
+Thumbs.db
+
+# User PDFs, extracted data, page previews and generated reports must stay out of Git.
+input/mock_papers/*.pdf
+input/mock_solutions/*.pdf
+input/neet_2026/*.pdf
+data/*
+!data/.gitkeep
