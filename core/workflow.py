@@ -282,9 +282,9 @@ def run_full_analysis(mock_dir: Path, solution_dir: Path, neet_pdf: Path, progre
 
     # Hard gate: never produce a report that silently omits questions because a PDF
     # was missing, scanned badly, or segmented incorrectly.
-    if len(mock_papers) != 30 or len(mock_questions) != config.EXPECTED_MOCK_QUESTIONS * 30 or len(neet_questions) != config.EXPECTED_NEET_QUESTIONS:
+    if len(mock_papers) != 30 or odd_papers or len(mock_questions) != config.EXPECTED_MOCK_QUESTIONS * 30 or len(neet_questions) != config.EXPECTED_NEET_QUESTIONS:
         raise RuntimeError(
-            "PDF extraction quality gate failed. Expected 30 mock papers / 5,400 mock questions / "
+            "PDF extraction quality gate failed. Expected 30 mock papers with 180 questions each / 5,400 mock questions / "
             f"{config.EXPECTED_NEET_QUESTIONS} NEET questions, but found {len(mock_papers)} papers / "
             f"{len(mock_questions)} mock questions / {len(neet_questions)} NEET questions. "
             "No final report was released. The import and extraction records are saved; check the PDF quality, "
