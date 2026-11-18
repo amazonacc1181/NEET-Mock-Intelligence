@@ -1,52 +1,39 @@
-# Start here — NEET Mock Intelligence
+# Start here — no PC required
 
-You do **not** need to buy an API, create a model-provider account, paste an API key or manually choose an AI model.
+## 1. Open the cloud notebook
 
-## One-time setup
+[**Open NEET Mock Intelligence in Google Colab**](https://colab.research.google.com/github/amazonacc1181/NEET-Mock-Intelligence/blob/main/NEET_Mock_Intelligence_Colab.ipynb)
 
-1. Install Python 3.11 or newer.
-2. On Windows, double-click `run_windows.bat`. On macOS/Linux, run `./run_mac_linux.sh` from a terminal.
-3. The launcher installs the Python requirements, installs Ollama where supported, detects available RAM/disk/GPU, downloads the best local model tier that fits, configures the local endpoint and opens the app at `http://localhost:8501`.
-4. The first run needs an internet connection and several GB to tens of GB of free disk space because model weights are downloaded once. They are not hosted in this GitHub repository.
+In Colab, choose **File → Save a copy in Drive** so you keep your own working notebook. The notebook embeds the project source and does not need to clone this GitHub repository when it runs. You can therefore make the GitHub repository private after saving your notebook copy.
 
-If automatic Ollama installation fails, install it from https://ollama.com/download and run the launcher again. The app's **ONE-CLICK** page also has a local AI repair/setup control.
+## 2. Select free cloud hardware
 
-## Your only analysis workflow
+In Colab choose **Runtime → Change runtime type → T4 GPU** when it is available. Free GPU access is not guaranteed. The notebook can fall back to smaller CPU models, but that will be much slower.
 
-Open the **ONE-CLICK: Full analysis** page:
+## 3. Run the notebook cells
 
-1. Upload the 30 mock question-paper PDFs together.
-2. Optionally upload answer keys / detailed mock solutions.
-3. Upload the actual NEET 2026 question-paper PDF.
-4. Click **START COMPLETE ANALYSIS — generate final PDF**.
+The notebook will:
 
-The local AI team then imports the papers, analyses the extracted mock questions, analyses the NEET paper, retrieves candidate matches, classifies and independently verifies matches where a second model is available, and creates the reports. Completed analyses are checkpointed, so you can resume after an interruption by pressing the same button again.
+- Ask you to connect your Google Drive once.
+- Install the PDF tools and local Ollama model runner in the Colab runtime.
+- Download the selected open-weight models (no API key or paid model service).
+- Ask you to upload all 30 mock PDFs together, then the NEET 2026 PDF. Optional solution PDFs can be included with filenames containing `solution`, `answer` or `key`.
+- Analyse each extracted question and create the final report bundle.
 
-## Files you receive
+Name your mock papers clearly, for example `Allen_Test_01.pdf` through `Allen_Test_30.pdf`. Name the real paper `NEET_2026.pdf` when uploading it.
 
-- `NEET_2026_Mock_Comparison_Detailed_Report.pdf` — the detailed report for every NEET question, with matched mock test/question numbers, relationship category, concepts, differences, solution comparison, evidence, confidence and unmatched/unprocessed status.
-- `All_Mock_Questions_Analysis_Catalogue.pdf` — a question-by-question analysis catalogue for the entire mock bank.
-- `NEET_2026_Mock_Comparison_Audit_Workbook.xlsx` — searchable tables containing the full mock analysis, NEET summary, every accepted match and extraction QA.
+## 4. Where the result is saved
 
-The files are downloadable from the app when the run finishes and are also saved locally under `data/`.
+The persistent folder is `Google Drive/MyDrive/NEET-Mock-Intelligence/`. It holds your uploaded PDFs, database checkpoint, page previews, embedding cache and final reports. At the end, the notebook offers the report bundle for download.
 
-## What the local model setup chooses
+## 5. Resume after a runtime reset
 
-The setup script checks available system RAM, NVIDIA VRAM when detectable, and free disk space. It selects one of these tiers:
+Colab's free runtime is temporary and its GPU quota/availability changes. The notebook backs up its database to Drive after each paper, analysis batch and NEET match. Reopen your saved notebook, run the setup/model cell, then rerun the analysis cell. Completed work is skipped and the remaining work resumes. The model weights may need to download again in a new runtime.
 
-- **High accuracy:** Qwen3.8 27B multimodal primary model + DeepSeek-R1 14B independent verifier + BGE-M3 embedding model + BGE reranker (requires a powerful computer and substantial storage).
-- **Balanced:** Qwen3.5 9B multimodal primary model + DeepSeek-R1 8B verifier + BGE-M3 semantic retrieval.
-- **Lightweight:** Qwen3.5 4B or 2B multimodal model and a smaller embedding model; no separate verifier. Analysis quality will be lower on this tier.
+## Accuracy and limitations
 
-Model weights are downloaded locally from the public Ollama registry and Hugging Face model registry. No per-token API payment is used. Model licensing is governed by the model authors' licences; review those before commercial reuse.
+The process is designed to avoid silent omissions: it checks expected paper/question counts and does not release the final PDF if analysis or matching is incomplete. OCR, diagrams and model reasoning can still be wrong; inspect extraction QA and low-confidence relationships. AI-derived solutions are labelled unverified unless supported by supplied solution material. Confidence scores are model judgements, not calibrated probabilities.
 
-## Important quality notes
+## Optional local installation
 
-- This is a local research assistant, not an official NEET answer key. AI-generated solutions are labelled and should be checked against trusted solutions.
-- PDF extraction QA is essential. Review warnings for scanned pages, two-column layouts, formulae, chemical structures, diagrams and missing question numbers.
-- The retriever ranks a candidate shortlist from the full bank, then the language model compares those candidates. A retrieval miss can still hide a true relationship.
-- “No meaningful match” means no qualifying match was accepted from the candidates retrieved; it is not proof that no similar mock question exists.
-- Model confidence is not a calibrated probability. Review low-confidence results and any result used for official teaching or assessment.
-- The app does not upload your files to GitHub. PDFs, model caches, local database and reports stay on your computer. The local Ollama service receives prompts only from your own computer.
-
-See `README.md` for technical details, limitations and troubleshooting.
+For Windows, run `run_windows.bat`. For macOS/Linux, run `run_mac_linux.sh`. This requires a computer and local model storage; the Colab notebook is the recommended route when you do not have a PC.

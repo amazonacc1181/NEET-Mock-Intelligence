@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.config import DB_PATH
+from core.config import DB_PATH, DB_MIRROR_PATH
 
 
 def utcnow() -> str:
@@ -98,6 +98,30 @@ def init_db() -> None:
             full_text TEXT NOT NULL
         );
         """)
+
+
+def checkpoint_database() -> None:
+    """Create a consistent SQLite backup at DB_MIRROR_PATH, if configured.
+
+    Colab's runtime disk is ephemeral. This uses SQLite's online backup API so the
+    checkpoint includes committed WAL data and can be restored after a runtime reset.
+    """
+    if not DB_MIRROR_PATH:
+        return
+    target = Path(DB_MIRROR_PATH)
+    if target.resolve() == DB_PATH.resolve() or not DB_PATH.exists():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".checkpoint.tmp")
+    source_conn = sqlite3.connect(DB_PATH, timeout=60)
+    dest_conn = sqlite3.connect(temporary, timeout=60)
+    try:
+        source_conn.backup(dest_conn)
+        dest_conn.commit()
+    finally:
+        dest_conn.close()
+        source_conn.close()
+    temporary.replace(target)
 
 
 def upsert_paper(paper: dict[str, Any]) -> None:

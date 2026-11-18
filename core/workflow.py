@@ -9,7 +9,7 @@ from typing import Any, Callable
 from core import config
 from core.database import (
     get_papers, get_questions, get_state, save_document_text, replace_questions,
-    save_matches, set_state, upsert_paper, delete_paper_by_filename, save_match_run, clear_matches,
+    save_matches, set_state, upsert_paper, delete_paper_by_filename, save_match_run, clear_matches, checkpoint_database,
 )
 from core.llm import (
     LLMError, analyze_question_batch, analyze_single_question, classify_matches,
@@ -44,6 +44,7 @@ def ingest_folder(folder: Path, forced_kind: str, progress: Progress | None = No
             upsert_paper(result["paper"])
             replace_questions(result["paper"]["id"], result["questions"])
             save_document_text(result["paper"]["id"], result["full_text"])
+            checkpoint_database()
             imported.append({
                 "filename": path.name,
                 "kind": kind,
@@ -67,6 +68,7 @@ def ingest_one_file(path: Path, kind: str, fallback_test_number: int = 1) -> dic
         upsert_paper(result["paper"])
         replace_questions(result["paper"]["id"], result["questions"])
         save_document_text(result["paper"]["id"], result["full_text"])
+        checkpoint_database()
     return result
 
 
@@ -127,6 +129,7 @@ def analyze_bank(kind: str = "mock", progress: Progress | None = None, batch_siz
                 data["_independent_review"] = {"status": "NOT_RUN", "issues": ["No independent verifier model was available for this run."], "answer_check": "UNCERTAIN", "concept_check": "UNCERTAIN"}
             update_analysis(question["id"], data)
             analyzed += 1
+        checkpoint_database()
 
     for start in range(0, len(questions), batch_size):
         batch = questions[start:start + batch_size]
@@ -181,7 +184,8 @@ def run_matching(progress: Progress | None = None, top_candidates: int | None = 
     errors: list[str] = []
 
     # A new mock bank invalidates the previous processed-ID marker; paper IDs are included in the run signature.
-    signature = ":".join(sorted(q["id"] for q in mock_questions))
+    # A new target NEET paper must invalidate the prior match checkpoint too.
+    signature = ":".join(sorted([q["id"] for q in mock_questions] + ["NEET:" + q["id"] for q in neet_questions]))
     signature_key = hashlib.sha256(signature.encode("utf-8")).hexdigest()
     last_signature = get_state("matching_signature")
     if last_signature != signature_key:
@@ -218,6 +222,7 @@ def run_matching(progress: Progress | None = None, top_candidates: int | None = 
             save_match_run(nq["id"], "matched" if matches else "no_meaningful_match", no_match_reason, len(candidates))
             processed.add(nq["id"])
             set_state("matched_neet_ids", sorted(processed))
+            checkpoint_database()
             newly_matched += len(matches)
         except Exception as exc:
             errors.append(f"NEET Q{nq['question_number']}: {type(exc).__name__}: {exc}")
@@ -273,6 +278,18 @@ def run_full_analysis(mock_dir: Path, solution_dir: Path, neet_pdf: Path, progre
     except Exception as exc:
         preflight_review = {"phase": "PAPER INGESTION QUALITY GATE", "status": "WARNING", "key_findings": [f"Manager review unavailable: {exc}"], "next_actions": []}
     set_state("manager_preflight_review", preflight_review)
+    checkpoint_database()
+
+    # Hard gate: never produce a report that silently omits questions because a PDF
+    # was missing, scanned badly, or segmented incorrectly.
+    if len(mock_papers) != 30 or len(mock_questions) != config.EXPECTED_MOCK_QUESTIONS * 30 or len(neet_questions) != config.EXPECTED_NEET_QUESTIONS:
+        raise RuntimeError(
+            "PDF extraction quality gate failed. Expected 30 mock papers / 5,400 mock questions / "
+            f"{config.EXPECTED_NEET_QUESTIONS} NEET questions, but found {len(mock_papers)} papers / "
+            f"{len(mock_questions)} mock questions / {len(neet_questions)} NEET questions. "
+            "No final report was released. The import and extraction records are saved; check the PDF quality, "
+            "OCR and page layout, then resume or re-import the corrected PDFs."
+        )
 
     progress(15, 100, f"Manager: {len(mock_questions):,} mock questions and {len(neet_questions)} NEET questions indexed. Starting specialist analysis…")
     mock_analysis = analyze_bank("mock", lambda i, n, m: progress(15 + int(46 * i / max(n, 1)), 100, m))
@@ -287,6 +304,12 @@ def run_full_analysis(mock_dir: Path, solution_dir: Path, neet_pdf: Path, progre
     progress(71, 100, "Relationship Examiner: retrieving and comparing mock candidates for each NEET question…")
     match_result = run_matching(lambda i, n, m: progress(71 + int(21 * i / max(n, 1)), 100, "Relationship Examiner / Independent Verifier: " + m), top_candidates=config.TOP_CANDIDATES, use_verifier=True)
     warnings.extend(match_result["errors"][:40])
+    if match_result["questions_processed"] < len(neet_questions):
+        raise RuntimeError(
+            f"Matching is incomplete: {match_result['questions_processed']} of {len(neet_questions)} "
+            "NEET questions have been processed. No final PDF was released. Fix the listed errors and rerun; "
+            "the saved checkpoints will resume the work."
+        )
 
     final_metrics = {
         "mock_papers": len(mock_papers),

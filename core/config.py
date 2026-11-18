@@ -7,14 +7,18 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
 
-INPUT_DIR = ROOT / "input"
+# Runtime workspace can be redirected to persistent cloud storage (e.g. Google Drive
+# from Colab) while the source code remains in the ephemeral notebook runtime.
+WORKSPACE_DIR = Path(os.getenv("NEET_WORKSPACE_DIR", str(ROOT))).expanduser().resolve()
+INPUT_DIR = WORKSPACE_DIR / "input"
 MOCK_DIR = INPUT_DIR / "mock_papers"
 SOLUTION_DIR = INPUT_DIR / "mock_solutions"
 NEET_DIR = INPUT_DIR / "neet_2026"
-DATA_DIR = ROOT / "data"
-PAGE_IMAGE_DIR = DATA_DIR / "page_images"
-CACHE_DIR = DATA_DIR / "cache"
-DB_PATH = DATA_DIR / "neet_matcher.sqlite3"
+DATA_DIR = Path(os.getenv("NEET_DATA_DIR", str(WORKSPACE_DIR / "data"))).expanduser().resolve()
+PAGE_IMAGE_DIR = Path(os.getenv("NEET_PAGE_IMAGE_DIR", str(DATA_DIR / "page_images"))).expanduser().resolve()
+CACHE_DIR = Path(os.getenv("NEET_CACHE_DIR", str(DATA_DIR / "cache"))).expanduser().resolve()
+DB_PATH = Path(os.getenv("NEET_DB_PATH", str(DATA_DIR / "neet_matcher.sqlite3"))).expanduser().resolve()
+DB_MIRROR_PATH = Path(os.getenv("NEET_DB_MIRROR_PATH", "")).expanduser().resolve() if os.getenv("NEET_DB_MIRROR_PATH") else None
 
 for path in (MOCK_DIR, SOLUTION_DIR, NEET_DIR, DATA_DIR, PAGE_IMAGE_DIR, CACHE_DIR):
     path.mkdir(parents=True, exist_ok=True)
