@@ -221,13 +221,21 @@ def export_pdf_report(path: Path) -> Path:
     story += [Spacer(1, 24*mm), Paragraph("NEET 2026", styles["CoverTitleCustom"]), Paragraph("Mock Test Relationship Analysis", styles["CoverTitleCustom"]), Spacer(1, 7*mm)]
     story.append(Paragraph("A question-by-question evidence report comparing the NEET 2026 paper with the indexed mock-test bank.", styles["BodyCustom"]))
     story.append(Spacer(1, 8*mm))
+    summary_label = ParagraphStyle(
+        name="SummaryLabel", parent=styles["SmallCustom"], fontName="Helvetica-Bold",
+        fontSize=7.2, leading=8.5, textColor=colors.HexColor("#17365D"), spaceAfter=0,
+    )
+    summary_value = ParagraphStyle(
+        name="SummaryValue", parent=styles["SmallCustom"], fontName="Helvetica",
+        fontSize=8, leading=9.2, textColor=colors.black, spaceAfter=0,
+    )
     summary_data = [
-        ["Mock papers", str(sum(p["kind"] == "mock" for p in papers)), "Mock questions", f"{len(mock_questions):,}"],
-        ["Mock questions analysed", f"{analyzed_mock:,}/{len(mock_questions):,}", "NEET questions analysed", f"{analyzed_neet:,}/{len(neet_questions):,}"],
-        ["NEET questions with matches", str(matched_neet), "No meaningful match", str(no_match)],
-        ["Unprocessed / failed", str(unprocessed), "Accepted mock-to-NEET pairs", str(len(matches))],
+        [Paragraph("Mock papers", summary_label), Paragraph(str(sum(p["kind"] == "mock" for p in papers)), summary_value), Paragraph("Mock questions", summary_label), Paragraph(f"{len(mock_questions):,}", summary_value)],
+        [Paragraph("Mock questions analysed", summary_label), Paragraph(f"{analyzed_mock:,}/{len(mock_questions):,}", summary_value), Paragraph("NEET questions analysed", summary_label), Paragraph(f"{analyzed_neet:,}/{len(neet_questions):,}", summary_value)],
+        [Paragraph("NEET questions with matches", summary_label), Paragraph(str(matched_neet), summary_value), Paragraph("No meaningful match", summary_label), Paragraph(str(no_match), summary_value)],
+        [Paragraph("Unprocessed / failed", summary_label), Paragraph(str(unprocessed), summary_value), Paragraph("Accepted mock-to-NEET pairs", summary_label), Paragraph(str(len(matches)), summary_value)],
     ]
-    table = Table(summary_data, colWidths=[42*mm, 38*mm, 42*mm, 38*mm])
+    table = Table(summary_data, colWidths=[46*mm, 32*mm, 46*mm, 32*mm])
     table.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#D9EAF7")),
         ("BACKGROUND", (2,0), (2,-1), colors.HexColor("#D9EAF7")),
